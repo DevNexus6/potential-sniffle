@@ -1,0 +1,117 @@
+function main_ocr()
+    clear; clc; close all;
+
+    %% 1. 生成/加载标准模板库 (0-9)
+    % 注：实际应用中可读取准备好的模板图片。这里用系统字体动态生成干净的印刷体模板。
+    fprintf('正在初始化数字模板库...\n');
+    templates = cell(1, 10);
+    for d = 0:9
+        % 创建一个临时画布写入文字，再提取二值特征
+        fig = figure('Visible', 'off');
+        text(0.3, 0.5, num2str(d), 'FontSize', 80, 'FontWeight', 'bold', 'FontName', 'Arial');
+        axis off;
+        frame = getframe(fig);
+        img_t = frame.cdata;
+        close(fig);
+        
+        % 转化为二值化标准大小 (32x32)
+        gray_t = rgb2gray(img_t);
+        bw_t = ~imbinarize(gray_t); % 反色，使文字为1(白)，背景为0(黑)
+        templates{d+1} = preprocess_single_digit(bw_t); 
+    end
+    fprintf('模板库初始化完成。\n\n');
+
+   % 2. 读取测试图片及预处理
+test = imread(' C:\Users\34429\Desktop\test_images\stress_test3_digit6_flip.jpg');%图片路径
+figure('Name','图像处理流程 (优化版)', 'Position', [100, 100, 1200, 800]);
+subplot(3,4,1), imshow(test), title('原图');
+
+tg = rgb2gray(test);
+subplot(3,4,2), imshow(tg), title('灰度图');
+
+    %% 3. 图像预处理流水线
+    % A. 灰度化
+    if size(test, 3) == 3
+        img_gray = rgb2gray(test);
+    else
+        img_gray = test;
+    end
+    
+    % B. 降噪（中值滤波）
+    img_denoised = medfilt2(img_gray, [3 3]);
+    
+    % C. 二值化分割 (使用Otsu自适应阈值)
+    thresh = graythresh(img_denoised);
+    img_bw = imbinarize(img_denoised, thresh);
+    img_bw = ~img_bw; % 背景变为黑色(0)，数字变为白色(1)
+    
+    % D. 形态学修补（开闭运算去噪、连通）
+    se = strel('disk', 2);
+    img_morph = imclose(img_bw, se);
+    img_morph = imopen(img_morph, se);
+
+    %% 4. 提取单个数字轮廓并归一化
+    % 寻找边界框，剔除边缘空白
+    [row, col] = find(img_morph);
+    if isempty(row)
+        error('未在图像中检测到数字目标！');
+    end
+    r_min = min(row); r_max = max(row);
+    c_min = min(col); c_max = max(col);
+    
+    % 裁剪出核心数字区域
+    img_cropped = img_morph(r_min:r_max, c_min:c_max);
+    % 归一化为 32x32 标准尺寸
+    img_normalized = imresize(img_cropped, [32, 32]);
+
+    %% 5. 模板匹配算法
+    min_distance = inf;
+    recognized_digit = -1;
+    distances = zeros(1, 10);
+
+    for d = 0:9
+        % 计算待测图与当前模板的欧氏距离
+        diff_matrix = img_normalized - templates{d+1};
+        dist = sqrt(sum(diff_matrix(:).^2));
+        distances(d+1) = dist;
+        
+        % 寻找最小距离
+        if dist < min_distance
+            min_distance = dist;
+            recognized_digit = d;
+        end
+    end
+
+    %% 6. 实验结果可视化展示
+    figure('Name', '简易OCR单数字识别系统 - 实验结果', 'NumberTitle', 'off');
+    
+    subplot(2, 3, 1); imshow(test); title('1. 原始输入图像(含噪声)');
+    subplot(2, 3, 2); imshow(img_denoised); title('2. 中值滤波降噪');
+    subplot(2, 3, 3); imshow(img_bw); title('3. Otsu二值化反色');
+    subplot(2, 3, 4); imshow(img_morph); title('4. 形态学处理');
+    subplot(2, 3, 5); imshow(img_normalized); title('5. 裁剪归一化(32x32)');
+    
+    % 结果呈现区
+    subplot(2, 3, 6);
+    axis off;
+    text(0.1, 0.8, '【识别结果】', 'FontSize', 14, 'FontWeight', 'bold', 'Color', 'k');
+    text(0.2, 0.4, num2str(recognized_digit), 'FontSize', 70, 'FontWeight', 'bold', 'Color', 'r');
+    title('6. 系统识别输出');
+    
+    % 打印控制台报告
+    fprintf('------ 识别分析报告 ------\n');
+    for d = 0:9
+        fprintf('与模板 [%d] 的欧氏距离: %.2f\n', d, distances(d+1));
+    end
+    fprintf('===========================\n');
+    fprintf('系统最终识别结果为: %d\n', recognized_digit);
+    fprintf('===========================\n');
+end
+
+function out = preprocess_single_digit(bw_img)
+    % 辅助函数：对生成的模板进行同样的边界裁剪与尺寸归一化
+    [row, col] = find(bw_img);
+    r_min = min(row); r_max = max(row);
+    c_min = min(col); c_max = max(col);
+    out = imresize(bw_img(r_min:r_max, c_min:c_max), [32, 32]);
+end
